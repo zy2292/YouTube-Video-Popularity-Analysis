@@ -1,0 +1,264 @@
+---
+title: "LDA"
+author: "Jannie(Mengqi) Chen, Keran Li, Zhen Li"
+date: "October 5, 2018"
+output: html_document
+---
+
+```{r, echo = FALSE}
+set.seed(1)
+```
+
+You'll see someone always has a happy face and someone keeps upset. But why? Curious about why people feel happy, it's interesting to investigate the happy moment of people who have different countries, genders, ages, marriages and so on. To learn more, a research about happy moment started and analysis follows. 
+
+# Step 0: read data and load libraries
+```{r read data, warning=FALSE, message=FALSE, echo=FALSE}
+library(tm)
+library(rJava)
+library(RColorBrewer)
+library(dplyr)
+library(tidyverse)
+library(tidytext)
+library(tidyr)
+library(sentimentr)
+library(ggplot2)
+library(qdap)
+library(syuzhet)
+library(DT)
+library(scales)
+library(wordcloud)
+library(gridExtra)
+library(ngram)
+library(shiny)
+library(psych)
+library(NLP)
+library(openNLP)
+library(widyr)
+library(ggraph)
+library(igraph)
+library(SnowballC)
+data <- read_csv("./data2.csv")
+# data <- read_csv("./USvideos.csv")
+nrow(data)
+head(data)
+```
+
+# Step 1: Clean data and the cleaned data contains 6351 obersevations
+```{r}
+# Remove duplicates based on video_id columns
+data_cleaned <- data[!duplicated(data$video_id), ]
+nrow(data_cleaned)
+```
+
+```{r}
+# Remove all the non-alphanumeric characters
+# data_cleaned$des_cleaned <- str_replace_all(data_cleaned$description, "[^[:alnum:]]", " ")
+```
+
+```{r text processing in tm}
+# Clean the text by converting all the letters to the lower case, and removing 
+# punctuation, numbers, empty words and extra white space.
+# corpus <- VCorpus(VectorSource(data_cleaned$des_cleaned))%>%
+#   tm_map(content_transformer(tolower))%>%
+#   tm_map(removePunctuation)%>%
+#   tm_map(removeNumbers)%>%
+#   tm_map(removeWords, character(0))%>%
+#   tm_map(stripWhitespace)
+```
+
+```{r stemming}
+# Stem the words and convert the "tm" object to a "tidy" object
+# stemmed <- tm_map(corpus, stemDocument) %>%
+#   tidy() %>%
+#   select(text)
+```
+
+```{r tidy dictionary}
+#  Create a tidy format of the dictionary to be used for completing stems
+# dict <- tidy(corpus) %>%
+#   select(text) %>%
+#   unnest_tokens(dictionary, text)
+```
+
+```{r stopwords}
+# Remove stopwords provided by the "tidytext" package and also add stopwords 
+# in context of our data.
+
+# data("stop_words")
+# 
+# words_delete <- c("channel","www","today","i","today","https","youtube","com","the","n","you","on","to","my","a","we","this","it","in","is","s","ly","http","of","https", "es","espn")
+# 
+# stop_words <- stop_words %>%
+#   bind_rows(mutate(tibble(words_delete),  lexicon = "updated"))
+```
+
+```{r tidy stems with dictionary}
+# Combine the stems and the dictionary into the same "tidy" object.
+# completed <- stemmed %>%
+#   mutate(id = row_number()) %>%
+#   unnest_tokens(stems, text) %>%
+#   bind_cols(dict) %>%
+#   anti_join(stop_words, by = c("dictionary" = "word"))
+```
+
+```{r stem completion, warning=FALSE, message=FALSE}
+# Complete the stems by picking the corresponding word with the highest frequency.
+# completed <- completed %>%
+#   group_by(stems) %>%
+#   count(dictionary) %>%
+#   mutate(word = dictionary[which.max(n)]) %>%
+#   ungroup() %>%
+#   select(stems, word) %>%
+#   distinct() %>%
+#   right_join(completed) %>%
+#   select(-stems)
+```
+
+```{r reverse unnest}
+# Paste the words together to form video description 
+# completed <- completed %>%
+#   group_by(id) %>%
+#   summarise(text = str_c(word, collapse = " ")) %>%
+#   ungroup()
+```
+
+```{r data_cleaned, warning=FALSE, message=FALSE}
+# Keeping a track of the video description with id
+# data_cleaned <- data_cleaned %>%
+#   mutate(id = row_number()) %>%
+#   inner_join(completed)
+```
+
+```{r}
+# Delete the id column and obeservations which description are NA
+data_cleaned$id <- NULL
+data_cleaned <- data_cleaned[!is.na(data_cleaned$new_description),]
+```
+
+```{r}
+data_cleaned <- data_cleaned %>%
+  select(video_id,
+         trending_date,
+         title, 
+         channel_title, 
+         category_id,
+         publish_time,
+         tags, 
+         views, 
+         likes, 
+         dislikes,
+         comment_count,
+         thumbnail_link,
+         comments_disabled,
+         ratings_disabled,
+         video_error_or_removed,
+         description,
+         new_description) %>%
+  mutate(count = sapply(data_cleaned$new_description, wordcount)) %>%
+  mutate(word.count = sapply(data_cleaned$description, wordcount))
+  
+head(data_cleaned,5)
+dim(data_cleaned)
+```
+
+# Step 2: 
+```{r}
+bag_of_words <-  data_cleaned %>%
+  unnest_tokens(word, new_description) 
+
+head(bag_of_words,5)
+```
+
+```{r}
+words_by_video <- bag_of_words %>%
+  count(video_id,category_id, word, sort = TRUE) %>%
+  ungroup()
+words_by_video
+```
+
+```{r}
+word_sentiments <- words_by_video %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(video_id, category_id) %>%
+  summarize(score = sum(score * n) / sum(n))
+
+word_sentiments  
+write_csv(word_sentiments, "/Users/janechen/Desktop/word_sentiments.csv")
+
+hist(word_sentiments$score, prob=TRUE, density=20, breaks=100, main="Histogram of Sentiment Score and Expected Normal Curve", xlab="Score", col = "#56B4E9")
+curve(dnorm(x, mean=mean(word_sentiments$score), sd=sd(word_sentiments$score)), add=TRUE, col="darkblue", lwd=2)  
+```
+
+```{r}
+words_by_category <- bag_of_words %>%
+  count(category_id, word, sort = TRUE) %>%
+  ungroup()
+words_by_category
+
+contributions <- bag_of_words %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(word) %>%
+  summarize(occurences = n(),
+            contribution = sum(score))
+
+contributions
+
+top_sentiment_words <- words_by_category %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  mutate(contribution = score * n / sum(n))
+
+top_sentiment_words <- na.omit(top_sentiment_words)
+
+top_sentiment_words %>%
+  group_by(category_id) %>%
+  top_n(5, abs(contribution)) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, contribution)) %>%
+  ggplot(aes(word, contribution, fill = contribution > 0)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ category_id, scales = "free", ncol = 3) +
+  coord_flip()
+```
+
+
+```{r, warning=F}
+# include only words that occur at least 50 times
+topic_word <- bag_of_words %>%
+  group_by(word) %>%
+  mutate(word_total = n()) %>%
+  ungroup() %>%
+  filter(word_total > 50)
+
+# convert into a document-term matrix
+# with document names such as sci.crypt_14147
+topic_dtm <- topic_word %>%
+  unite(document,category_id, video_id) %>%
+  count(document, word) %>%
+  cast_dtm(document, word, n) 
+```
+# Step 3: Run the LDA 
+
+```{r}
+# Find we should have how many categories 
+sort(unique(data_cleaned$category_id))
+length(sort(unique(data_cleaned$category_id)))
+```
+
+```{r}
+library(topicmodels)
+topic_lda <- LDA(topic_dtm, k = 8, control = list(seed = 2018))
+```
+
+```{r}
+topic_lda %>%
+  tidy() %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free_y") +
+  coord_flip()
+```
+
